@@ -82,6 +82,41 @@ Finally, in order to run Cilium locally on VMs, you need:
 | `VirtualBox <https://www.virtualbox.org/wiki/Downloads>`_  | >= 5.2                | N/A (OS-specific)                                                              |
 +------------------------------------------------------------+-----------------------+--------------------------------------------------------------------------------+
 
+Kind-based Setup (preferred)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The setup for a `kind <https://kind.sigs.k8s.io/>`_ environment lives in
+``contrib/scripts/kind.sh``. This setup does not require any VMs and/or
+VirtualBox on Linux, but `Docker for Mac
+<https://docs.docker.com/desktop/install/mac-install/>`_ is required for Mac
+OS.
+
+There are Makefile targets that make it easy to use to spin up an environment
+and build Cilium images.
+
+* ``make kind``: Creates a kind cluster based on configuration passed in (see
+  below for configuration).
+* ``make kind-image``: Builds all Cilium images and loads them into the
+  cluster.
+* ``make kind-image-agent``: Builds the Cilium Agent image only and loads it
+  into the cluster.
+* ``make kind-image-operator``: Builds the Cilium Operator (generic) image only
+  and loads it into the cluster.
+* ``make kind-image-debug``: Builds all Cilium images with optimizations
+  disabled and ``dlv`` embedded for live debugging enabled and loads the images
+  into the cluster.
+* ``make kind-install-cilium``: Installs Cilium into the cluster using the
+  Cilium CLI.
+* ``make kind-down``: Tears down and deletes the cluster.
+
+The above is a non-exhaustive list, yet includes the most used commands for
+convenience. See the Makefile for more specific targets.
+
+Configuration for clusters
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+TODO
+
 Vagrant Setup
 ~~~~~~~~~~~~~
 
