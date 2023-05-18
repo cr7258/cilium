@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-openapi/strfmt"
@@ -172,7 +173,19 @@ func (d *Daemon) launchHubble() {
 		}
 	}
 
-	d.hubbleObserver, err = observer.NewLocalServer(payloadParser, logger,
+	namespaceManager := observer.NewNamespaceManager()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		namespaceManager.Run(d.ctx)
+		wg.Done()
+	}()
+	defer wg.Wait()
+
+	d.hubbleObserver, err = observer.NewLocalServer(
+		payloadParser,
+		namespaceManager,
+		logger,
 		observerOpts...,
 	)
 	if err != nil {

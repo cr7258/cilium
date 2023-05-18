@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/sirupsen/logrus"
+	"golang.org/x/exp/slices"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -229,6 +230,103 @@ func (s *Server) GetNodes(ctx context.Context, req *observerpb.GetNodesRequest) 
 		return nil, err
 	}
 	return &observerpb.GetNodesResponse{Nodes: nodes}, nil
+}
+
+// GetNamespaces implements observerpb.ObserverClient.GetNamespaces.
+func (s *Server) GetNamespaces(ctx context.Context, req *observerpb.GetNamespacesRequest) (*observerpb.GetNamespacesResponse, error) {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		ctx = metadata.NewOutgoingContext(ctx, md)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// We are not using errgroup.WithContext because we will return partial
+	// results over failing on the first error
+	g := new(errgroup.Group)
+
+	namespaceCh := make(chan *observerpb.Namespace)
+	done := make(chan struct{})
+	// use a map as a set to de-duplicate namespaces returned
+	namespaceSet := make(map[string]*observerpb.Namespace)
+
+	// this go routine aggregates the results by using a map as a set of unique
+	// namespaces
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ns, ok := <-namespaceCh:
+				if !ok {
+					return
+				}
+				key := ns.GetCluster() + "/" + ns.GetNamespace()
+				namespaceSet[key] = ns
+			}
+		}
+	}()
+
+	for _, p := range s.peers.List() {
+		if !isAvailable(p.Conn) {
+			s.opts.log.WithField("address", p.Address).Infof(
+				"No connection to peer %s, skipping", p.Name,
+			)
+			s.peers.ReportOffline(p.Name)
+			continue
+		}
+
+		p := p
+		g.Go(func() error {
+			client := s.opts.ocb.observerClient(&p)
+			nsResp, err := client.GetNamespaces(ctx, req)
+			if err != nil {
+				s.opts.log.WithFields(logrus.Fields{
+					"error": err,
+					"peer":  p,
+				}).Warning("Failed to retrieve namespaces")
+				return nil
+			}
+
+			for _, ns := range nsResp.GetNamespaces() {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case namespaceCh <- ns:
+				}
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	// Close namespaceCh as a signal to the aggregator that all producers are
+	// done, informing it to return
+	close(namespaceCh)
+
+	// Wait for the aggregator Go routine to return
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-done:
+	}
+
+	// Convert our namespaceSet to a list and sort it before returning the results.
+	namespaces := make([]*observerpb.Namespace, 0, len(namespaceSet))
+	for _, ns := range namespaceSet {
+		namespaces = append(namespaces, ns)
+	}
+	slices.SortFunc(namespaces, func(a, b *observerpb.Namespace) bool {
+		if a.Cluster != b.Cluster {
+			return a.Cluster < b.Cluster
+		}
+		return a.Namespace < b.Namespace
+	})
+
+	return &observerpb.GetNamespacesResponse{Namespaces: namespaces}, nil
 }
 
 // ServerStatus implements observerpb.ObserverServer.ServerStatus by aggregating

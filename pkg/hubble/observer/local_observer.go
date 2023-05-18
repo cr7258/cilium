@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"golang.org/x/exp/slices"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -27,6 +28,7 @@ import (
 	observerTypes "github.com/cilium/cilium/pkg/hubble/observer/types"
 	"github.com/cilium/cilium/pkg/hubble/parser"
 	parserErrors "github.com/cilium/cilium/pkg/hubble/parser/errors"
+	"github.com/cilium/cilium/pkg/lock"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 )
 
@@ -61,11 +63,19 @@ type LocalObserverServer struct {
 
 	// numObservedFlows counts how many flows have been observed
 	numObservedFlows uint64
+
+	namespaceManager NamespaceManager
+}
+
+type NamespaceManager interface {
+	GetNamespaces() []*observerpb.Namespace
+	AddNamespace(*observerpb.Namespace)
 }
 
 // NewLocalServer returns a new local observer server.
 func NewLocalServer(
 	payloadParser *parser.Parser,
+	namespaceManager NamespaceManager,
 	logger logrus.FieldLogger,
 	options ...observeroption.Option,
 ) (*LocalObserverServer, error) {
@@ -83,13 +93,14 @@ func NewLocalServer(
 	}).Info("Configuring Hubble server")
 
 	s := &LocalObserverServer{
-		log:           logger,
-		ring:          container.NewRing(opts.MaxFlows),
-		events:        make(chan *observerTypes.MonitorEvent, opts.MonitorBuffer),
-		stopped:       make(chan struct{}),
-		payloadParser: payloadParser,
-		startTime:     time.Now(),
-		opts:          opts,
+		log:              logger,
+		ring:             container.NewRing(opts.MaxFlows),
+		events:           make(chan *observerTypes.MonitorEvent, opts.MonitorBuffer),
+		stopped:          make(chan struct{}),
+		payloadParser:    payloadParser,
+		startTime:        time.Now(),
+		namespaceManager: namespaceManager,
+		opts:             opts,
 	}
 
 	for _, f := range s.opts.OnServerInit {
@@ -142,6 +153,19 @@ nextEvent:
 		}
 
 		if flow, ok := ev.Event.(*flowpb.Flow); ok {
+			// track namespaces seen.
+			if srcNs := flow.GetSource().GetNamespace(); srcNs != "" {
+				s.namespaceManager.AddNamespace(&observerpb.Namespace{
+					Namespace: srcNs,
+					Cluster:   nodeTypes.GetClusterName(),
+				})
+			}
+			if dstNs := flow.GetDestination().GetNamespace(); dstNs != "" {
+				s.namespaceManager.AddNamespace(&observerpb.Namespace{
+					Namespace: dstNs,
+					Cluster:   nodeTypes.GetClusterName(),
+				})
+			}
 			for _, f := range s.opts.OnDecodedFlow {
 				stop, err := f.OnDecodedFlow(ctx, flow)
 				if err != nil {
@@ -215,6 +239,11 @@ func (s *LocalObserverServer) ServerStatus(
 // GetNodes implements observerpb.ObserverClient.GetNodes.
 func (s *LocalObserverServer) GetNodes(ctx context.Context, req *observerpb.GetNodesRequest) (*observerpb.GetNodesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "GetNodes not implemented")
+}
+
+// GetNamespaces implements observerpb.ObserverClient.GetNamespaces.
+func (s *LocalObserverServer) GetNamespaces(ctx context.Context, req *observerpb.GetNamespacesRequest) (*observerpb.GetNamespacesResponse, error) {
+	return &observerpb.GetNamespacesResponse{Namespaces: s.namespaceManager.GetNamespaces()}, nil
 }
 
 // GetFlows implements the proto method for client requests.
@@ -680,4 +709,66 @@ func newRingReader(ring *container.Ring, req genericRequest, whitelist, blacklis
 		}
 	}
 	return container.NewRingReader(ring, idx), nil
+}
+
+type namespaceRecord struct {
+	namespace *observerpb.Namespace
+	added     time.Time
+}
+
+type namespaceManager struct {
+	mu         lock.RWMutex
+	namespaces map[string]namespaceRecord
+}
+
+func NewNamespaceManager() *namespaceManager {
+	return &namespaceManager{
+		namespaces: make(map[string]namespaceRecord),
+	}
+}
+
+func (m *namespaceManager) Run(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case t := <-ticker.C:
+			// periodically remove any namespaces which haven't been seen in flows
+			// for the last hour
+			m.mu.Lock()
+			for key, record := range m.namespaces {
+				if record.added.Add(time.Hour).After(t) {
+					delete(m.namespaces, key)
+				}
+			}
+			m.mu.Unlock()
+		}
+	}
+}
+
+func (m *namespaceManager) GetNamespaces() []*observerpb.Namespace {
+	m.mu.RLock()
+	namespaces := make([]*observerpb.Namespace, 0, len(m.namespaces))
+	for _, ns := range m.namespaces {
+		namespaces = append(namespaces, ns.namespace)
+	}
+	m.mu.RUnlock()
+
+	slices.SortFunc(namespaces, func(a, b *observerpb.Namespace) bool {
+		if a.Cluster != b.Cluster {
+			return a.Cluster < b.Cluster
+		}
+		return a.Namespace < b.Namespace
+	})
+	return namespaces
+}
+
+func (m *namespaceManager) AddNamespace(ns *observerpb.Namespace) {
+	m.mu.Lock()
+	key := ns.GetCluster() + "/" + ns.GetNamespace()
+	m.namespaces[key] = namespaceRecord{namespace: ns, added: time.Now()}
+	m.mu.Unlock()
 }
