@@ -9,7 +9,7 @@ require (
 	github.com/Azure/go-autorest/autorest/adal v0.9.21
 	github.com/Azure/go-autorest/autorest/azure/auth v0.5.11
 	github.com/Azure/go-autorest/autorest/to v0.4.0
-	github.com/aliyun/alibaba-cloud-sdk-go v1.62.318
+	github.com/aliyun/alibaba-cloud-sdk-go v1.62.329
 	github.com/aws/aws-sdk-go-v2 v1.18.0
 	github.com/aws/aws-sdk-go-v2/config v1.18.3
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.12.19
@@ -71,14 +71,14 @@ require (
 	github.com/sasha-s/go-deadlock v0.3.1
 	github.com/servak/go-fastping v0.0.0-20160802140958-5718d12e20a0
 	github.com/shirou/gopsutil/v3 v3.23.4
-	github.com/sirupsen/logrus v1.9.0
-	github.com/spf13/cast v1.5.0
+	github.com/sirupsen/logrus v1.9.2
+	github.com/spf13/cast v1.5.1
 	github.com/spf13/cobra v1.7.0
 	github.com/spf13/pflag v1.0.5
 	github.com/spf13/viper v1.15.0
 	github.com/spiffe/go-spiffe/v2 v2.1.4
-	github.com/spiffe/spire-api-sdk v1.6.3
-	github.com/stretchr/testify v1.8.2
+	github.com/spiffe/spire-api-sdk v1.6.4
+	github.com/stretchr/testify v1.8.3
 	github.com/tidwall/gjson v1.14.4
 	github.com/tidwall/sjson v1.2.5
 	github.com/vishvananda/netlink v1.2.1-beta.2.0.20220608195807-1a118fe229fc
